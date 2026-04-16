@@ -1,27 +1,31 @@
 const axios = require('axios')
+const { retryAsync } = require('../../utils/retry')
+const { logInfo } = require('../../utils/logger')
+
+const client = axios.create({ baseURL: 'https://premku.com/api', timeout: 10000 })
 
 async function createDeposit(apiKey, amount) {
-    const res = await axios.post('https://premku.com/api/pay', {
-        api_key: apiKey,
-        amount
+    return retryAsync(async () => {
+        const res = await client.post('/pay', { api_key: apiKey, amount })
+        logInfo('Payment createDeposit response', { status: res.status, data: res.data })
+        return res.data
     })
-    return res.data
 }
 
 async function checkDeposit(apiKey, invoice) {
-    const res = await axios.post('https://premku.com/api/pay_status', {
-        api_key: apiKey,
-        invoice
+    return retryAsync(async () => {
+        const res = await client.post('/pay_status', { api_key: apiKey, invoice })
+        logInfo('Payment checkDeposit response', { status: res.status, data: res.data })
+        return res.data
     })
-    return res.data
 }
 
 async function cancelDeposit(apiKey, invoice) {
-    const res = await axios.post('https://premku.com/api/cancel_pay', {
-        api_key: apiKey,
-        invoice
+    return retryAsync(async () => {
+        const res = await client.post('/cancel_pay', { api_key: apiKey, invoice })
+        logInfo('Payment cancelDeposit response', { status: res.status, data: res.data })
+        return res.data
     })
-    return res.data
 }
 
 module.exports = {

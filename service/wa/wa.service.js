@@ -1,14 +1,18 @@
+const fs = require('fs')
 const { Client, LocalAuth } = require('whatsapp-web.js')
 const qrcode = require('qrcode-terminal')
 const path = require('path')
+const { logInfo, logError } = require('../../utils/logger')
+
+const sessionDir = path.join(process.cwd(), 'sessions')
+if (!fs.existsSync(sessionDir)) {
+    fs.mkdirSync(sessionDir, { recursive: true })
+}
 
 function startWhatsApp() {
-    const sessionId = Date.now().toString()
-    const sessionPath = path.join('./sessions', sessionId)
-
     const client = new Client({
         authStrategy: new LocalAuth({
-            dataPath: sessionPath
+            dataPath: sessionDir
         }),
         puppeteer: {
             headless: true,
@@ -19,27 +23,35 @@ function startWhatsApp() {
                 '--disable-accelerated-2d-canvas',
                 '--no-first-run',
                 '--no-zygote',
-                '--single-process', // Added for stability
+                '--single-process',
                 '--disable-gpu'
             ]
         }
     })
 
     client.on('qr', qr => {
-        console.log('📱 Scan QR Code:')
+        logInfo('QR code received, waiting for scan')
         qrcode.generate(qr, { small: true })
     })
 
     client.on('ready', () => {
-        console.log('✅ WhatsApp Connected')
+        logInfo('✅ WhatsApp Connected')
     })
 
     client.on('auth_failure', msg => {
-        console.error('❌ Authentication failed:', msg)
+        logError('❌ WhatsApp auth failure', msg)
+        setTimeout(() => {
+            logInfo('Reinitializing WhatsApp client after auth failure')
+            client.initialize().catch(err => logError('Reinitialize failed', err))
+        }, 5000)
     })
 
     client.on('disconnected', reason => {
-        console.log('🔌 WhatsApp disconnected:', reason)
+        logError('🔌 WhatsApp disconnected', reason)
+        setTimeout(() => {
+            logInfo('Reinitializing WhatsApp client after disconnect')
+            client.initialize().catch(err => logError('Reinitialize failed', err))
+        }, 5000)
     })
 
     return client

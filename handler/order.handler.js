@@ -2,6 +2,7 @@ const fs = require('fs')
 const path = require('path')
 const payment = require('../service/payment/payment.service')
 const premku = require('../service/premku/premku.service')
+const { logInfo, logError } = require('../utils/logger')
 
 const pendingPath = path.join(__dirname, '../database/pending.json')
 
@@ -61,33 +62,34 @@ async function checkOrders(client) {
                     const password = passwordParts[0]
                     const note = passwordParts.slice(1).join(' - ')
 
-                    if (trx.qr_message_id) {
+                    if (trx.qr_message_id && typeof client.deleteMessage === 'function') {
                         try {
-                            await client.deleteMessage(trx.user, trx.qr_message_id)
-                            console.log('Deleted QR message for', key)
-                        } catch (err) {
-                            console.log('Unable to delete QR message:', err.message)
+                            await client.deleteMessage(trx.user, trx.qr_message_id, false)
+                            logInfo('Deleted QR image message for order', { invoice: key })
+                        } catch (deleteError) {
+                            logError('Could not delete QR message', { invoice: key, error: deleteError.message })
                         }
                     }
 
                     await client.sendMessage(trx.user,
 `✅ *PEMBAYARAN BERHASIL*
 
+📦 Produk: ${status.product}
+💰 Total: Rp ${trx.total?.toLocaleString('id-ID') || '-'}
+
 📧 Email: ${acc.username}
 🔑 Password: ${password}
 
-📦 Produk: ${status.product}
 📄 Invoice: ${key}
+${note ? `\n📝 *Catatan:* ${note}` : ''}
 
-${note ? `📝 *Catatan:* ${note}` : ''}
-
-Terima kasih telah berbelanja! 🚀`
+Terima kasih telah menggunakan *Premiumin Plus* 🚀`
                     )
 
                     db[key].status = 'SUCCESS'
-                    console.log('Order completed for', key)
+                    logInfo('Order completed successfully', { invoice: key })
                 } else {
-                    console.log('Order not ready yet for', key)
+                    logInfo('Order not ready yet', { invoice: key, status: status.status })
                 }
             } else if (pay.data?.status === 'expired' || pay.data?.status === 'failed') {
                 db[key].status = 'EXPIRED'

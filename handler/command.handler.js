@@ -23,28 +23,30 @@ function createQrMedia(qrImage) {
     return new MessageMedia('image/png', base64)
 }
 
-function calculatePrice(price) {
-    let marginPercent = 0.11
+function getMarginPercentage(price) {
+    if (price <= 4999) return 0.79
+    if (price <= 8999) return 0.59
+    if (price <= 19999) return 0.19
+    if (price <= 100000) return 0.10
+    return 0.10
+}
 
-    if (price <= 4999) marginPercent = 0.79
-    else if (price <= 8999) marginPercent = 0.56
-    else if (price <= 19999) marginPercent = 0.19
-    else if (price <= 100000) marginPercent = 0.11
-
-    return Math.ceil(price + price * marginPercent)
+function calculateSaleBase(price) {
+    const marginPct = getMarginPercentage(price)
+    return Math.ceil(price + price * marginPct)
 }
 
 function randomCode() {
-    return Math.floor(Math.random() * (399 - 100 + 1)) + 100
+    return Math.floor(Math.random() * (349 - 119 + 1)) + 119
 }
 
-function generateUnique(total, db) {
-    let final = total
+function generateUnique(base, db) {
+    let final = base
     let code
 
     do {
         code = randomCode()
-        final = total + code
+        final = base + code
     } while (Object.values(db).some(x => x.total === final && x.status === 'WAITING'))
 
     return { total: final, code }
@@ -90,9 +92,9 @@ Ketik *RESELLER* untuk info lengkap.`
 
 📌 *Menu Utama:*
 • ketik *stok* → cek produk tersedia
-• ketik *buy* → beli akun premium
+• ketik *buy* → info pembelian produk
 • ketik *admin* → hubungi admin (no toxic / no rasis)
-• ketik *website* → SSM Panel (Beta)`
+• website → SSM Panel (Beta)`
         )
     }
 
@@ -137,16 +139,16 @@ Keuntungan jadi Reseller:
         res.products.forEach(p => {
             if (p.stock <= 0) return
 
-            const harga = calculatePrice(p.price)
+            const basePrice = calculateSaleBase(p.price)
             const code = p.id
 
-            msgText += `📦 ${p.name}\n`
+            msgText += `📦 *${p.name}*\n`
             msgText += `📊 Stok: ${p.stock}\n`
-            msgText += `💰 Rp ${harga.toLocaleString('id-ID')}\n`
-            msgText += `🔑 Code: buy ${code}\n\n`
+            msgText += `💰 Rp *${basePrice.toLocaleString('id-ID')}*\n`
+            msgText += `🔑 buy ${code}\n\n`
         })
 
-        msgText += 'Ketik: buy id\nContoh: buy 1'
+        msgText += 'Ketik: buy id atau buyid\nContoh: buy 1'
 
         return client.sendMessage(msg.from, msgText)
     }
@@ -171,7 +173,7 @@ Keuntungan jadi Reseller:
             }
 
             let db = readDB()
-            const base = calculatePrice(product.price)
+            const base = calculateSaleBase(product.price)
             const { total, code } = generateUnique(base, db)
 
             const invoice = 'INV-' + Date.now()
@@ -189,7 +191,7 @@ Keuntungan jadi Reseller:
                 user: msg.from,
                 product_id: id,
                 total,
-                unique_code: code,
+                code,
                 invoice_pay: pay.data.invoice,
                 status: 'WAITING'
             }
@@ -199,25 +201,24 @@ Keuntungan jadi Reseller:
             const caption =
 `💳 *PEMBAYARAN PREMIUMIN PLUS*
 
-📦 ${product.name}
-💰 Total  : Rp ${total.toLocaleString('id-ID')}
-
+📦 *${product.name}*
+💰 Total: Rp *${total.toLocaleString('id-ID')}*
 📄 Invoice: ${pay.data.invoice}
 
 ⚠️ *WAJIB bayar sesuai nominal!*
-
 ⏳ Batas waktu: 5 menit
 🔄 Otomatis diproses setelah bayar
 
-❌ *CANCEL*: Ketik cancel ${invoice}`
+❌ cancel ${invoice}`
 
             const media = createQrMedia(pay.data.qr_image)
             if (media) {
-                const sent = await client.sendMessage(msg.from, media, { caption })
-                const qrMessageId = sent.id?._serialized || sent.id
-                db[invoice].qr_message_id = qrMessageId
-                saveDB(db)
-                return sent
+                const sentMessage = await client.sendMessage(msg.from, media, { caption })
+                if (sentMessage && sentMessage.id) {
+                    db[invoice].qr_message_id = sentMessage.id._serialized || sentMessage.id
+                    saveDB(db)
+                }
+                return sentMessage
             }
 
             return client.sendMessage(msg.from,
@@ -233,8 +234,9 @@ ${pay.data.qr_raw}`
     }
 
     // ================= CANCEL =================
-    if (text.startsWith('cancel ')) {
-        const invoice = text.split(' ')[1]
+    if (text.startsWith('cancel')) {
+        const match = text.match(/^cancel\s*(INV-[0-9]+)$/i)
+        const invoice = match ? match[1] : null
         if (!invoice) {
             return client.sendMessage(msg.from, '❌ Format: cancel INV-123456789')
         }
@@ -249,20 +251,21 @@ ${pay.data.qr_raw}`
                 return client.sendMessage(msg.from, '❌ Invoice sudah diproses atau expired')
             }
 
-            // Cancel payment via API
             const cancelRes = await payment.cancelDeposit(process.env.API_KEY, db[invoice].invoice_pay)
             console.log('Cancel response:', cancelRes)
 
-            if (cancelRes.success) {
+            const success = cancelRes?.success === true || cancelRes?.status === 'success' || String(cancelRes?.message || '').toLowerCase().includes('batal')
+            if (success) {
                 db[invoice].status = 'CANCELLED'
                 saveDB(db)
-                return client.sendMessage(msg.from, '✅ Pembayaran berhasil dibatalkan')
-            } else {
-                return client.sendMessage(msg.from, `❌ Gagal cancel: ${cancelRes.message || 'Unknown error'}`)
+                return client.sendMessage(msg.from, '✅ Pesanan dibatalkan')
             }
+
+            const responseMessage = cancelRes?.message || cancelRes?.data?.message || 'Unknown error'
+            return client.sendMessage(msg.from, `❌ Gagal cancel: ${responseMessage}`)
         } catch (error) {
-            console.error('Cancel error:', error.message)
-            return client.sendMessage(msg.from, `❌ Terjadi kesalahan: ${error.message}`)
+            console.error('Cancel error:', error)
+            return client.sendMessage(msg.from, `❌ Terjadi kesalahan: ${error.message || error}`)
         }
     }
 }

@@ -3,25 +3,60 @@ require('dotenv').config()
 const { startWhatsApp } = require('../service/wa/wa.service')
 const { handleMessage } = require('../handler/message.handler')
 const { checkOrders } = require('../handler/order.handler')
+const { logInfo, logError } = require('../utils/logger')
 
-async function startBot() {
-    console.log('🚀 BOT START')
+let client = null
+let orderInterval = null
+let restartTimeout = null
 
-    const client = startWhatsApp()
-
-    client.on('message', async msg => {
-        await handleMessage(client, msg)
+function setupClientEvents(clientInstance) {
+    clientInstance.on('message', async msg => {
+        await handleMessage(clientInstance, msg)
     })
 
-    client.initialize()
+    clientInstance.on('ready', () => {
+        logInfo('WhatsApp client ready')
+    })
+}
 
-    // AUTO CHECK
-    setInterval(() => {
-        checkOrders(client)
+function startOrderCheck(clientInstance) {
+    if (orderInterval) clearInterval(orderInterval)
+    orderInterval = setInterval(() => {
+        checkOrders(clientInstance).catch(err => logError('Order check failed', err))
     }, 10000)
 }
 
-startBot()
+async function startBot() {
+    try {
+        logInfo('🚀 BOT START')
 
-process.on('uncaughtException', err => console.log(err))
-process.on('unhandledRejection', err => console.log(err))
+        client = startWhatsApp()
+        setupClientEvents(client)
+        client.initialize()
+        startOrderCheck(client)
+    } catch (error) {
+        logError('Failed to start bot', error)
+        scheduleRestart()
+    }
+}
+
+function scheduleRestart() {
+    if (restartTimeout) return
+    restartTimeout = setTimeout(() => {
+        restartTimeout = null
+        logInfo('Restarting bot after failure')
+        startBot()
+    }, 5000)
+}
+
+process.on('uncaughtException', err => {
+    logError('Uncaught exception', err)
+    scheduleRestart()
+})
+
+process.on('unhandledRejection', err => {
+    logError('Unhandled rejection', err)
+    scheduleRestart()
+})
+
+startBot()
