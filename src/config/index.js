@@ -2,7 +2,7 @@ const path = require('path')
 const dotenv = require('dotenv')
 const { decrypt } = require('../utils/crypto')
 
-dotenv.config()
+dotenv.config({ path: path.resolve(__dirname, '../../.env') })
 
 const SESSION_PATH = path.resolve(process.cwd(), 'sessions')
 const { ENCRYPTED_API_KEY, CRYPTO_SECRET, API_KEY: RAW_API_KEY } = process.env

@@ -1,6 +1,6 @@
-require('dotenv').config()
+require('dotenv').config({ path: require('path').resolve(__dirname, '../.env') })
 
-const { createClient } = require('../src/service/wa/wa.service')
+const { createClient } = require('../src/service/wa.service')
 const { handleIncomingMessage } = require('../src/handler/message.handler')
 const { startOrderWatcher } = require('../src/handler/order.handler')
 const { logInfo, logError } = require('../src/utils/logger')
