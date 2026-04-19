@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # 🤖 WhatsApp Bot Premiumku
 
 Bot WhatsApp otomatis untuk jual akun premium (auto stok, auto pembayaran, auto kirim akun).
