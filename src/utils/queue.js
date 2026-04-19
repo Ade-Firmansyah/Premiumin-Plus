@@ -2,6 +2,7 @@ const { logInfo, logError } = require('./logger')
 
 const queue = []
 let isProcessing = false
+const MAX_QUEUE_SIZE = 50 // Limit queue size to prevent memory bloat
 
 async function processQueue() {
   if (isProcessing) return
@@ -21,6 +22,12 @@ async function processQueue() {
 }
 
 function enqueue(client, msg, handler) {
+  // Prevent queue from growing too large
+  if (queue.length >= MAX_QUEUE_SIZE) {
+    logError('Queue overflow', { size: queue.length })
+    return
+  }
+  
   queue.push({ client, msg, handler })
   processQueue().catch(error => {
     logError('Queue processing failed', error)

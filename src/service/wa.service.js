@@ -23,10 +23,27 @@ function createClient() {
         '--disable-setuid-sandbox',
         '--disable-dev-shm-usage',
         '--disable-accelerated-2d-canvas',
+        '--disable-extensions',
+        '--disable-features=TranslateUI',
+        '--disable-renderer-backgrounding',
+        '--disable-backgrounding-occluded-windows',
+        '--disable-breakpad',
+        '--disable-client-side-phishing-detection',
+        '--disable-default-apps',
+        '--disable-hang-monitor',
+        '--disable-popup-blocking',
+        '--disable-preconnect',
+        '--disable-prompt-on-repost',
+        '--disable-sync',
+        '--enable-automation',
         '--no-first-run',
+        '--no-pings',
         '--no-zygote',
         '--single-process',
-        '--disable-gpu'
+        '--disable-gpu',
+        '--disable-web-resources',
+        '--disable-component-extensions-with-background-pages',
+        '--disable-component-update'
       ]
     }
   })

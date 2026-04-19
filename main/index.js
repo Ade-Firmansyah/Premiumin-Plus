@@ -1,9 +1,9 @@
 require('dotenv').config()
 
-const { startWhatsApp } = require('../service/wa/wa.service')
-const { handleMessage } = require('../handler/message.handler')
-const { checkOrders } = require('../handler/order.handler')
-const { logInfo, logError } = require('../utils/logger')
+const { createClient } = require('../src/service/wa/wa.service')
+const { handleIncomingMessage } = require('../src/handler/message.handler')
+const { startOrderWatcher } = require('../src/handler/order.handler')
+const { logInfo, logError } = require('../src/utils/logger')
 
 let client = null
 let orderInterval = null
@@ -11,29 +11,22 @@ let restartTimeout = null
 
 function setupClientEvents(clientInstance) {
     clientInstance.on('message', async msg => {
-        await handleMessage(clientInstance, msg)
+        await handleIncomingMessage(clientInstance, msg)
     })
 
     clientInstance.on('ready', () => {
         logInfo('WhatsApp client ready')
+        startOrderWatcher(clientInstance)
     })
-}
-
-function startOrderCheck(clientInstance) {
-    if (orderInterval) clearInterval(orderInterval)
-    orderInterval = setInterval(() => {
-        checkOrders(clientInstance).catch(err => logError('Order check failed', err))
-    }, 10000)
 }
 
 async function startBot() {
     try {
         logInfo('🚀 BOT START')
 
-        client = startWhatsApp()
+        client = createClient()
         setupClientEvents(client)
         client.initialize()
-        startOrderCheck(client)
     } catch (error) {
         logError('Failed to start bot', error)
         scheduleRestart()

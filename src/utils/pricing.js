@@ -15,7 +15,7 @@ function buildUniqueTotal(basePrice, existingTotals) {
   while (attempts < 20) {
     const uniqueCode = 100 + Math.floor(Math.random() * 300)
     const total = basePrice + uniqueCode
-    if (!existingTotals.has(total)) {
+    if (!existingTotals.includes(total)) {
       return {
         total,
         code: uniqueCode

@@ -5,6 +5,13 @@ const { startScheduler: startStatusScheduler, stopScheduler: stopStatusScheduler
 const { validateSystem } = require('./utils/validator')
 const { logInfo, logError } = require('./utils/logger')
 
+// Enable aggressive garbage collection for memory optimization
+if (global.gc) {
+  setInterval(() => {
+    global.gc()
+  }, 60000) // Run GC every 60 seconds
+}
+
 let botClient = null
 let orderWatcherStarted = false
 

@@ -1,10 +1,10 @@
 const { createRouter } = require('../utils/router')
 const { sanitizeText, formatCurrency, buildQrMedia, buildHeader } = require('../utils/format')
-const { calculateSalePrice, buildUniqueTotal } = require('../utils/pricing')
+const { calculateSalePrice } = require('../utils/pricing')
 const { logInfo, logError } = require('../utils/logger')
 const premku = require('../service/premku.service')
 const payment = require('../service/payment.service')
-const db = require('../database/db')
+const db = require('../../database/db')
 const { API_KEY } = require('../config')
 
 async function greetingHandler({ client, msg }) {
@@ -53,22 +53,21 @@ async function stockHandler({ client, msg }) {
       return client.sendMessage(msg.from, '🔎 Maaf, stok produk belum tersedia saat ini.')
     }
 
-    let message = `${buildHeader('Katalog Premiumin Plus')}\n\n`
+    let message = `📦 *DAFTAR PRODUK TERSEDIA*\n`
+    message += `━━━━━━━━━━━━━━━\n\n`
     availableProducts.forEach(product => {
-      const name = product.name || 'Produk Premium'
+      const name = (product.name || 'Produk Premium').toUpperCase()
       const stock = Number(product.stock) || 0
       const price = calculateSalePrice(Number(product.price) || 0)
       const code = product.id || '-'
-      message += `📦 *${name}*\n`
-      message += `📊 Stok: ${stock} Akun\n`
-      message += `💰 Rp ${formatCurrency(price)}\n`
-      message += `🔑 Code: buy ${code}\n\n`
+      message += `📦 ${name} || STOK : ${stock} AKUN\n`
+      message += `💰 PRICE : Rp ${formatCurrency(price)} || 🔑 CODE : buy ${code}\n\n`
     })
 
-    message += '━━━━━━━━━━━━━━━\n'
-    message += '📌 *Cara Order:*\n'
-    message += 'Ketik: buy [kode]\n'
-    message += 'Contoh: buy 14'
+    message += `━━━━━━━━━━━━━━━\n`
+    message += `📥 Cara beli:\n`
+    message += `buy <kode>\n\n`
+    message += `❓ Kurang paham? Hubungi admin 😎`
 
     return client.sendMessage(msg.from, message)
   } catch (error) {
@@ -98,22 +97,22 @@ async function buyHandler({ client, msg }, args) {
     }
 
     const basePrice = calculateSalePrice(product.price)
-    const unique = buildUniqueTotal(basePrice, db.getPendingTotals())
-    const invoiceId = `INV-${Date.now()}`
-
-    const paymentResponse = await payment.createDeposit(API_KEY, unique.total)
+    const paymentResponse = await payment.createDeposit(API_KEY, basePrice)
     const payData = paymentResponse.data || paymentResponse
     if (!payData || !payData.invoice) {
       throw new Error('Respons pembayaran tidak valid')
     }
+
+    const total = payData.total_bayar || basePrice
+    const invoiceId = `INV-${Date.now()}`
 
     const orderRecord = {
       invoice: invoiceId,
       user: msg.from,
       product_id: product.id,
       product_name: product.name,
-      total: unique.total,
-      code: unique.code,
+      total: total,
+      code: payData.kode_unik || 0,
       invoice_pay: payData.invoice,
       status: 'WAITING',
       created_at: Date.now(),
@@ -123,7 +122,7 @@ async function buyHandler({ client, msg }, args) {
     db.addOrder(orderRecord)
 
     const caption =
-`${buildHeader('Tagihan Pembayaran')}\n\n📦 Produk: *${product.name}*\n💰 Total: *Rp ${formatCurrency(unique.total)}*\n📄 Invoice: *${invoiceId}*\n\n⚠️ Bayar tepat sesuai nominal\n⏳ Batas waktu: 5 menit\n🔄 Otomatis diproses setelah bayar\n\n*Batal jika ingin membatalkan:*\ncancel ${invoiceId}`
+`${buildHeader('Tagihan Pembayaran')}\n\n📦 Produk: *${product.name}*\n💰 Total: *Rp ${formatCurrency(total)}*\n📄 Invoice: *${invoiceId}*\n\n⚠️ Bayar tepat sesuai nominal\n⏳ Batas waktu: 5 menit\n🔄 Otomatis diproses setelah bayar\n\n*Batal jika ingin membatalkan:*\ncancel ${invoiceId}`
 
     const media = buildQrMedia(payData.qr_image)
     if (media) {
@@ -174,6 +173,26 @@ async function cancelHandler({ client, msg }, args) {
   }
 }
 
+async function testPayHandler({ client, msg }, args) {
+  const invoice = args[0] ? args[0].toString().trim().toUpperCase() : null
+  if (!invoice || !invoice.startsWith('INV-')) {
+    return client.sendMessage(msg.from, '❌ Format testpay salah. Gunakan: *testpay INV-123456789*')
+  }
+
+  const order = db.getOrder(invoice)
+  if (!order || order.user !== msg.from) {
+    return client.sendMessage(msg.from, '❌ Invoice tidak ditemukan atau bukan milik Anda.')
+  }
+
+  if (order.status !== 'WAITING') {
+    return client.sendMessage(msg.from, `❌ Status invoice: ${order.status}. Sudah diproses.`)
+  }
+
+  // Simulate successful payment
+  db.updateOrder(invoice, { status: 'SUCCESS' })
+  return client.sendMessage(msg.from, '✅ Pembayaran berhasil! Silakan tunggu data segera dikirimkan.')
+}
+
 async function noopHandler({ client, msg }) {
   return
 }
@@ -185,6 +204,7 @@ const route = createRouter({
   stock: stockHandler,
   buy: buyHandler,
   cancel: cancelHandler,
+  testpay: testPayHandler,
   admin: adminHandler,
   website: websiteHandler,
   reseller: resellerHandler,

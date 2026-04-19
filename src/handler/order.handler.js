@@ -1,7 +1,7 @@
 const { API_KEY } = require('../config')
 const payment = require('../service/payment.service')
 const premku = require('../service/premku.service')
-const db = require('../database/db')
+const db = require('../../database/db')
 const { logInfo, logError } = require('../utils/logger')
 const { formatCurrency } = require('../utils/format')
 
@@ -70,9 +70,15 @@ async function fulfillOrder(client, order) {
   const successMessage =
 `✅ *PEMBAYARAN BERHASIL*\n\n📦 Produk: *${order.product_name}*\n💰 Total: Rp *${formatCurrency(order.total)}*\n\n📧 Username: ${account.username}\n🔑 Password: ${password || '-'}\n${note ? `\n📝 Catatan: ${note}` : ''}\n\n📄 Invoice: *${order.invoice}*\n\nTerima kasih telah menggunakan *Premiumin Plus* 🚀`
 
-  await client.sendMessage(order.user, successMessage)
-  db.updateOrder(order.invoice, { status: 'SUCCESS' })
-  logInfo('Order fulfilled', { invoice: order.invoice })
+  try {
+    await client.sendMessage(order.user, successMessage)
+    db.updateOrder(order.invoice, { status: 'SUCCESS' })
+    logInfo('Order fulfilled', { invoice: order.invoice })
+  } catch (sendError) {
+    logError('Failed to send success message', { invoice: order.invoice, error: sendError.message })
+    // Still mark as success since account was delivered
+    db.updateOrder(order.invoice, { status: 'SUCCESS' })
+  }
 }
 
 async function expireOldOrders(client) {
@@ -97,13 +103,24 @@ async function expireOldOrders(client) {
 }
 
 function startOrderWatcher(client) {
-  setInterval(() => {
+  // Increased intervals to reduce CPU load
+  // Check pending orders every 15 seconds (was 10)
+  const orderCheckInterval = setInterval(() => {
     processPendingOrders(client).catch(error => logError('Pending order checker failed', error))
-  }, 10 * 1000)
+  }, 15 * 1000)
 
-  setInterval(() => {
+  // Check expiring orders every 90 seconds (was 60)
+  const expirationInterval = setInterval(() => {
     expireOldOrders(client).catch(error => logError('Order expiration failed', error))
-  }, 60 * 1000)
+  }, 90 * 1000)
+
+  // Cleanup function for graceful shutdown
+  return {
+    stop: () => {
+      clearInterval(orderCheckInterval)
+      clearInterval(expirationInterval)
+    }
+  }
 }
 
 module.exports = {
