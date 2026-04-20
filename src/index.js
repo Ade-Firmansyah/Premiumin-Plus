@@ -1,4 +1,4 @@
-const { createClient } = require('./service/wa.service')
+const { createClient, killExistingBrowsers } = require('./service/wa.service')
 const { handleIncomingMessage } = require('./handler/message.handler')
 const { startOrderWatcher } = require('./handler/order.handler')
 const { startScheduler: startStatusScheduler, stopScheduler: stopStatusScheduler } = require('./service/status.service')
@@ -31,7 +31,7 @@ if (global.gc) {
 let botClient = null
 let orderWatcherStarted = false
 
-function initializeBot() {
+async function initializeBot() {
   logInfo('🚀 Starting Premiumin Plus WhatsApp bot')
 
   if (!validateSystem()) {
@@ -41,6 +41,13 @@ function initializeBot() {
 
   stopStatusScheduler()
   orderWatcherStarted = false
+
+  // Kill existing browser processes to prevent conflicts (only for local development)
+  if (!process.env.RAILWAY_ENVIRONMENT) {
+    await killExistingBrowsers()
+    // Wait a bit for processes to fully terminate
+    await new Promise(resolve => setTimeout(resolve, 2000))
+  }
 
   botClient = createClient()
 

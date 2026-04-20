@@ -1,5 +1,6 @@
 const fs = require('fs')
 const path = require('path')
+const { spawn } = require('child_process')
 const qrcode = require('qrcode-terminal')
 const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js')
 const { logInfo, logError } = require('../utils/logger')
@@ -11,13 +12,63 @@ function ensureSessionPath() {
   }
 }
 
+function killExistingBrowsers() {
+  return new Promise((resolve) => {
+    try {
+      // Kill Chrome processes on Windows
+      const kill = spawn('taskkill', ['/f', '/im', 'chrome.exe', '/t'], { stdio: 'inherit' })
+      kill.on('close', () => {
+        logInfo('Killed existing Chrome processes')
+        resolve()
+      })
+      kill.on('error', () => {
+        // Ignore errors if no processes found
+        resolve()
+      })
+    } catch (error) {
+      logError('Failed to kill existing browsers', error)
+      resolve()
+    }
+  })
+}
+
+function clearSessionData() {
+  try {
+    if (fs.existsSync(SESSION_PATH)) {
+      const files = fs.readdirSync(SESSION_PATH)
+      for (const file of files) {
+        const filePath = path.join(SESSION_PATH, file)
+        if (fs.statSync(filePath).isFile()) {
+          fs.unlinkSync(filePath)
+        }
+      }
+      logInfo('Cleared existing session data')
+    }
+  } catch (error) {
+    logError('Failed to clear session data', error)
+  }
+}
+
 function createClient() {
   ensureSessionPath()
 
+  // For Railway deployment, use different configuration
+  const isRailway = process.env.RAILWAY_ENVIRONMENT
+
+  if (isRailway) {
+    clearSessionData()
+    killExistingBrowsers()
+  }
+
   const client = new Client({
-    authStrategy: new LocalAuth({ dataPath: SESSION_PATH }),
+    authStrategy: new LocalAuth({
+      dataPath: isRailway
+        ? path.join(SESSION_PATH, `session_${Date.now()}`)
+        : SESSION_PATH
+    }),
     puppeteer: {
       headless: true,
+      executablePath: isRailway ? undefined : undefined, // Let Puppeteer find Chrome
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
@@ -43,7 +94,14 @@ function createClient() {
         '--disable-gpu',
         '--disable-web-resources',
         '--disable-component-extensions-with-background-pages',
-        '--disable-component-update'
+        '--disable-component-update',
+        ...(isRailway ? [
+          '--disable-background-timer-throttling',
+          '--disable-renderer-backgrounding',
+          '--disable-backgrounding-occluded-windows',
+          '--disable-features=UserMediaScreenCapturing',
+          '--memory-pressure-off'
+        ] : [])
       ]
     }
   })
@@ -78,5 +136,6 @@ function createClient() {
 
 module.exports = {
   createClient,
+  killExistingBrowsers,
   MessageMedia
 }
