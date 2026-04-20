@@ -23,9 +23,6 @@ RUN apt-get update && apt-get install -y \
   xdg-utils \
   wget
 
-# Verify Chromium executable path in build logs
-RUN which chromium || true
-
 # Set environment to skip Puppeteer Chromium download
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 
@@ -33,6 +30,10 @@ WORKDIR /app
 
 COPY package*.json ./
 RUN npm install
+
+# Verify Chromium path during build so Railway logs show the installed binary location
+RUN command -v chromium || command -v chromium-browser || true
+RUN ls -l /usr/bin/chromium /usr/bin/chromium-browser || true
 
 COPY . .
 
