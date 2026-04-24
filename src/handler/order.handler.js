@@ -4,9 +4,44 @@ const premku = require('../service/premku.service')
 const db = require('../../database/db')
 const { logInfo, logError } = require('../utils/logger')
 const { formatCurrency } = require('../utils/format')
+const qrcode = require('qrcode')
+const crypto = require('crypto')
 
 let isProcessingOrders = false
 let isExpiringOrders = false
+
+// Cache in-memory untuk transaksi QR (ringan, auto cleanup)
+const qrTransactions = new Map()
+const lastUserOrder = new Map() // Anti-spam: track last order per user
+const CLEANUP_INTERVAL = 10 * 60 * 1000 // 10 menit
+const CHECK_INTERVAL = 15 * 1000 // 15 detik
+const ORDER_COOLDOWN = 30 * 1000 // 30 detik anti-spam
+
+// Auto cleanup transaksi lama
+setInterval(() => {
+  const now = Date.now()
+  for (const [invoice, data] of qrTransactions.entries()) {
+    if (now - data.timestamp > CLEANUP_INTERVAL) {
+      qrTransactions.delete(invoice)
+    }
+  }
+}, CLEANUP_INTERVAL)
+
+// Interval check status otomatis
+setInterval(async () => {
+  for (const [invoice, data] of qrTransactions.entries()) {
+    if (data.status === 'pending') {
+      try {
+        const statusResponse = await premku.checkOrder(API_KEY, invoice)
+        if (statusResponse.status === 'success' && Array.isArray(statusResponse.accounts) && statusResponse.accounts.length) {
+          await fulfillQrOrder(data.client, invoice, statusResponse.accounts[0])
+        }
+      } catch (error) {
+        logError('QR status check failed', { invoice, error: error.message })
+      }
+    }
+  }
+}, CHECK_INTERVAL)
 
 async function processPendingOrders(client) {
   if (isProcessingOrders) return
@@ -149,6 +184,93 @@ function startOrderWatcher(client) {
   }
 }
 
+// Fungsi baru: Generate ref_id unik untuk anti-duplicate
+function generateRefId() {
+  const timestamp = Date.now()
+  const random = crypto.randomBytes(4).toString('hex')
+  return `${timestamp}-${random}`
+}
+
+// Fungsi baru: Create order dengan QR payment
+async function createQrOrder(client, userId, productId, productName, total) {
+  try {
+    // Anti-spam: Check last order
+    const lastOrder = lastUserOrder.get(userId)
+    if (lastOrder && Date.now() - lastOrder < ORDER_COOLDOWN) {
+      await client.sendMessage(userId, '⏳ Tunggu 30 detik sebelum membuat order baru untuk menghindari spam.')
+      return
+    }
+
+    // Generate unique ref_id
+    const refId = generateRefId()
+
+    // Create order via API Premku
+    const orderResponse = await premku.createOrder(API_KEY, productId, 1, refId)
+
+    if (!orderResponse.success) {
+      logError('QR Order creation failed', { userId, productId, response: orderResponse })
+      await client.sendMessage(userId, `❌ Gagal membuat order: ${orderResponse.message || 'Unknown error'}`)
+      return
+    }
+
+    const invoice = orderResponse.invoice
+
+    // Generate QR code (simulasi - bisa diganti dengan API jika ada)
+    const qrData = `PAY:${invoice}:${total}` // Simulasi data QR
+    const qrCodeUrl = await qrcode.toDataURL(qrData)
+
+    // Simpan transaksi di cache
+    qrTransactions.set(invoice, {
+      userId,
+      invoice,
+      status: 'pending',
+      product: { id: productId, name: productName },
+      total,
+      timestamp: Date.now(),
+      client
+    })
+
+    // Update last order untuk anti-spam
+    lastUserOrder.set(userId, Date.now())
+
+    // Kirim invoice dan QR ke user
+    const message = `🛒 *ORDER BARU*\n\n📦 Produk: ${productName}\n💰 Total: Rp ${formatCurrency(total)}\n📄 Invoice: ${invoice}\n\n🔗 QR Code: ${qrCodeUrl}\n\nSilakan scan QR untuk pembayaran. Bot akan cek status otomatis.`
+
+    await client.sendMessage(userId, message)
+    logInfo('QR Order created', { invoice, userId, productId })
+
+  } catch (error) {
+    logError('Create QR order failed', { userId, productId, error: error.message })
+    await client.sendMessage(userId, '❌ Terjadi kesalahan saat membuat order. Coba lagi nanti.')
+  }
+}
+
+// Fungsi baru: Fulfill QR order saat status success
+async function fulfillQrOrder(client, invoice, account) {
+  const transaction = qrTransactions.get(invoice)
+  if (!transaction) return
+
+  try {
+    const [password, ...noteParts] = (account.password || '').split(' - ')
+    const note = noteParts.filter(Boolean).join(' - ')
+
+    const successMessage =
+`✅ *PEMBAYARAN BERHASIL*\n\n📦 Produk: *${transaction.product.name}*\n💰 Total: Rp *${formatCurrency(transaction.total)}*\n\n📧 Username: ${account.username}\n🔑 Password: ${password || '-'}\n${note ? `\n📝 Catatan: ${note}` : ''}\n\n📄 Invoice: *${invoice}*\n\nTerima kasih telah menggunakan *Premiumin Plus* 🚀`
+
+    await client.sendMessage(transaction.userId, successMessage)
+
+    // Update status dan hapus dari cache
+    transaction.status = 'success'
+    qrTransactions.delete(invoice)
+
+    logInfo('QR Order fulfilled', { invoice })
+
+  } catch (error) {
+    logError('Fulfill QR order failed', { invoice, error: error.message })
+  }
+}
+
 module.exports = {
-  startOrderWatcher
+  startOrderWatcher,
+  createQrOrder
 }

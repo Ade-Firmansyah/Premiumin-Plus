@@ -1,3 +1,8 @@
+<<<<<<< HEAD
+=======
+<<<<<<< HEAD
+<<<<<<< HEAD
+>>>>>>> 5f399f6c2f3c01817678698d2737a6f57f0ebaa1
 # 🤖 WhatsApp Bot Premiumku
 
 Bot WhatsApp otomatis untuk jual akun premium (auto stok, auto pembayaran, auto kirim akun).
@@ -233,3 +238,6 @@ Bot sudah teroptimasi untuk Railway:
 - Logging dikurangi di production
 
 🚀 Bot siap dipakai jualan otomatis
+=======
+# premiumin-plus
+>>>>>>> a66f55ec037b1f71b120e8f1de2bb8b916b67fd3

@@ -8,6 +8,7 @@ const resellerService = require('../service/reseller.service')
 const transactionService = require('../service/transaction.service')
 const db = require('../../database/db')
 const { API_KEY } = require('../config')
+const { createQrOrder } = require('./order.handler')
 
 async function greetingHandler({ client, msg }) {
   const text = sanitizeText(msg.body).toLowerCase()
@@ -25,7 +26,7 @@ async function greetingHandler({ client, msg }) {
 
 async function menuHandler({ client, msg }) {
   return client.sendMessage(msg.from,
-`${buildHeader('Menu Premiumin Plus')}\n📌 _Panduan singkat penggunaan bot_\n\n• *STOK* → daftar produk ready\n• *BUY <id>* atau *BUY<id>* → mulai transaksi\n• *CANCEL INV-...* → batalkan pembayaran\n• *ADMIN* → kontak admin cepat\n• *RESELLER* → info paket reseller\n`)
+`${buildHeader('Menu Premiumin Plus')}\n📌 _Panduan singkat penggunaan bot_\n\n• *STOK* → daftar produk ready\n• *BUY <id>* atau *BUY<id>* → mulai transaksi (deposit)\n• *QRBUY <id>* atau *QRBUY<id>* → order langsung dengan QR\n• *CANCEL INV-...* → batalkan pembayaran\n• *ADMIN* → kontak admin cepat\n• *RESELLER* → info paket reseller\n`)
 }
 
 async function adminHandler({ client, msg }) {
@@ -191,6 +192,38 @@ async function buyHandler({ client, msg }, args) {
   } catch (error) {
     logError('Buy handler failed', error)
     return client.sendMessage(msg.from, `❌ Gagal membuat pembayaran: ${error.message}`)
+  }
+}
+
+// Handler baru: QR Buy - Order langsung dengan QR payment
+async function qrBuyHandler({ client, msg }, args) {
+  const productId = parseId(args)
+  if (!productId) {
+    return client.sendMessage(msg.from, '❌ Format salah. Gunakan: *QRBUY 1* atau *QRBUY1*')
+  }
+
+  try {
+    const productsResponse = await premku.getProducts(API_KEY)
+    const product = (productsResponse.products || []).find(item => item.id === productId)
+    if (!product) {
+      return client.sendMessage(msg.from, '❌ Produk tidak ditemukan. Coba lagi dengan ID yang benar.')
+    }
+
+    const basePrice = Number(product.price) || 0
+    const isReseller = resellerService.isReseller(msg.from)
+    const pricing = await getFinalPrice(basePrice, msg.from, isReseller, {
+      id: product.id,
+      stock: Number(product.stock) || 0
+    })
+
+    const total = Math.round(pricing.finalPrice)
+
+    // Gunakan createQrOrder untuk order langsung
+    await createQrOrder(client, msg.from, product.id, product.name, total)
+
+  } catch (error) {
+    logError('QR Buy handler failed', error)
+    return client.sendMessage(msg.from, `❌ Gagal membuat order QR: ${error.message}`)
   }
 }
 
@@ -406,6 +439,7 @@ const route = createRouter({
   stok: stockHandler,
   stock: stockHandler,
   buy: buyHandler,
+  qrBuy: qrBuyHandler,
   cancel: cancelHandler,
   testpay: testPayHandler,
   admin: adminHandler,

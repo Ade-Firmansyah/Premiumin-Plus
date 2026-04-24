@@ -43,6 +43,27 @@ setInterval(() => {
   logInfo(`Cache cleanup: ${cacheCleanup.size} entries remaining`)
 }, 300000) // Every 5 minutes
 
+// Optimasi Linux: Puppeteer memory cleanup untuk Ubuntu VPS
+const puppeteerCleanup = () => {
+  if (botClient && botClient.pupBrowser) {
+    try {
+      // Close unused pages/tabs untuk hemat RAM
+      const pages = botClient.pupBrowser.pages()
+      if (pages.length > 1) { // Keep main page
+        for (let i = 1; i < pages.length; i++) {
+          pages[i].close().catch(() => {}) // Ignore errors
+        }
+        logInfo('Puppeteer cleanup: closed unused pages')
+      }
+    } catch (error) {
+      logError('Puppeteer cleanup failed', error)
+    }
+  }
+}
+
+// Jalankan cleanup setiap 10 menit
+setInterval(puppeteerCleanup, 10 * 60 * 1000)
+
 let botClient = null
 let orderWatcherStarted = false
 let isInitializing = false
@@ -50,6 +71,12 @@ let isInitializing = false
 async function initializeBot() {
   if (isInitializing) {
     logInfo('Bot initialization already in progress, skipping')
+    return
+  }
+
+  // Optimasi: Prevent multiple browser instances
+  if (botClient) {
+    logInfo('Bot client already exists, skipping initialization')
     return
   }
 

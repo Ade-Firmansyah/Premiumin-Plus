@@ -10,6 +10,8 @@ const { SESSION_PATH } = require('../config')
 
 let latestQrDataUrl = null
 let qrServer = null
+// Fix: Flag untuk prevent multiple instance
+let isStarting = false
 
 function ensureSessionPath() {
   if (!fs.existsSync(SESSION_PATH)) {
@@ -19,17 +21,53 @@ function ensureSessionPath() {
 
 function killExistingBrowsers() {
   return new Promise((resolve) => {
+    const isWindows = process.platform === 'win32'
+    const isLinux = process.platform === 'linux'
+
     try {
-      // Kill Chrome processes on Windows
-      const kill = spawn('taskkill', ['/f', '/im', 'chrome.exe', '/t'], { stdio: 'inherit' })
-      kill.on('close', () => {
-        logInfo('Killed existing Chrome processes')
+      if (isWindows) {
+        // Kill Chrome processes on Windows
+        const killChrome = spawn('taskkill', ['/f', '/im', 'chrome.exe', '/t'], { stdio: 'inherit' })
+        const killChromium = spawn('taskkill', ['/f', '/im', 'chromium.exe', '/t'], { stdio: 'inherit' })
+
+        let completed = 0
+        const checkComplete = () => {
+          completed++
+          if (completed === 2) {
+            logInfo('Killed existing Chrome/Chromium processes on Windows')
+            resolve()
+          }
+        }
+
+        killChrome.on('close', checkComplete)
+        killChromium.on('close', checkComplete)
+        killChrome.on('error', checkComplete)
+        killChromium.on('error', checkComplete)
+
+      } else if (isLinux) {
+        // Kill Chromium processes on Linux
+        const killChromium = spawn('pkill', ['-f', 'chromium'], { stdio: 'inherit' })
+        const killChrome = spawn('pkill', ['-f', 'chrome'], { stdio: 'inherit' })
+
+        let completed = 0
+        const checkComplete = () => {
+          completed++
+          if (completed === 2) {
+            logInfo('Killed existing Chromium/Chrome processes on Linux')
+            resolve()
+          }
+        }
+
+        killChromium.on('close', checkComplete)
+        killChrome.on('close', checkComplete)
+        killChromium.on('error', checkComplete)
+        killChrome.on('error', checkComplete)
+
+      } else {
+        // Unsupported platform, just resolve
+        logInfo('Browser kill not supported on this platform')
         resolve()
-      })
-      kill.on('error', () => {
-        // Ignore errors if no processes found
-        resolve()
-      })
+      }
     } catch (error) {
       logError('Failed to kill existing browsers', error)
       resolve()
@@ -51,6 +89,19 @@ function clearSessionData() {
     }
   } catch (error) {
     logError('Failed to clear session data', error)
+  }
+}
+
+// Fix: Clean SingletonLock tanpa hapus session utama
+function cleanSingletonLock() {
+  try {
+    const lockFile = path.join(SESSION_PATH, 'SingletonLock')
+    if (fs.existsSync(lockFile)) {
+      fs.rmSync(lockFile, { force: true })
+      logInfo('Cleaned SingletonLock file')
+    }
+  } catch (error) {
+    logError('Failed to clean SingletonLock', error)
   }
 }
 
@@ -95,8 +146,12 @@ function startQrHttpServer(port = process.env.PORT || 3000) {
 function createClient() {
   ensureSessionPath()
 
+  // Fix: Clean SingletonLock sebelum start
+  cleanSingletonLock()
+
   // For Railway deployment, use different configuration
   const isRailway = process.env.RAILWAY_ENVIRONMENT
+  const isProduction = process.env.NODE_ENV === 'production'
 
   if (isRailway) {
     clearSessionData()
@@ -111,96 +166,180 @@ function createClient() {
     sessionPath = path.join(SESSION_PATH, `session_${Date.now()}`)
   }
 
-  // Use stable session configuration to prevent random logouts
-  const client = new Client({
-    authStrategy: new LocalAuth({
-      clientId: "bot-session",
-      dataPath: "./sessions"
-    }),
-    puppeteer: {
-      headless: true,
-      executablePath: isRailway ? '/usr/bin/chromium' : undefined, // Use Chromium binary path on Debian/Railway
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--disable-accelerated-2d-canvas',
-        '--disable-extensions',
-        '--disable-features=TranslateUI',
-        '--disable-renderer-backgrounding',
-        '--disable-backgrounding-occluded-windows',
-        '--disable-breakpad',
-        '--disable-client-side-phishing-detection',
-        '--disable-default-apps',
-        '--disable-hang-monitor',
-        '--disable-popup-blocking',
-        '--disable-preconnect',
-        '--disable-prompt-on-repost',
-        '--disable-sync',
-        '--enable-automation',
-        '--no-first-run',
-        '--no-pings',
-        '--no-zygote',
-        '--single-process',
-        '--disable-gpu',
-        '--disable-web-resources',
-        '--disable-component-extensions-with-background-pages',
-        '--disable-component-update',
-        '--disable-background-networking', // Optimasi: kurangi background networking
-        '--disable-background-timer-throttling', // Optimasi: kurangi throttling untuk memory
-        '--memory-pressure-off', // Optimasi: matikan memory pressure handling
-        '--max_old_space_size=512', // Optimasi: batasi heap size untuk stability
-        '--optimize-for-size', // Optimasi: optimasi untuk ukuran kecil
-        '--disable-logging', // Optimasi: disable logging untuk performa
-        '--disable-dev-tools', // Optimasi: disable dev tools
-        '--disable-software-rasterizer', // Optimasi: disable software rasterizer
-        ...(isRailway ? [
-          '--disable-background-timer-throttling',
-          '--disable-renderer-backgrounding',
-          '--disable-backgrounding-occluded-windows',
-          '--disable-features=UserMediaScreenCapturing',
-          '--memory-pressure-off'
-        ] : [])
-      ]
+  // Optimasi: Fungsi untuk create client dengan retry
+  const createClientWithRetry = (retryCount = 0) => {
+    // Fix: Prevent multiple instance
+    if (isStarting) {
+      logInfo('Client creation already in progress, skipping')
+      return
     }
-  })
+    isStarting = true
 
-  client.on('qr', qr => {
-    logInfo('QR code generated, scan with WhatsApp mobile app')
-    qrcode.generate(qr, { small: true })
-
-    QRCode.toDataURL(qr)
-      .then((url) => {
-        latestQrDataUrl = url
-        logInfo('QR image generated for browser preview')
+    try {
+      // Fix: Kill browser lama sebelum launch
+      killExistingBrowsers().then(() => {
+        // Use stable session configuration to prevent random logouts
+        const client = new Client({
+        authStrategy: new LocalAuth({
+          clientId: "bot-session",
+          dataPath: "./sessions"
+        }),
+        puppeteer: {
+          headless: true, // Wajib headless untuk Linux VPS
+          executablePath: isRailway ? '/usr/bin/chromium' : (isProduction ? '/usr/bin/chromium-browser' : undefined), // Optimize: Set for Ubuntu VPS
+          args: [
+            // Optimasi Linux headless low memory: args untuk Ubuntu VPS
+            '--no-sandbox', // Disable sandbox untuk containerized env
+            '--disable-setuid-sandbox', // Disable setuid sandbox
+            '--disable-dev-shm-usage', // Disable shared memory usage (penting untuk Docker/Railway)
+            '--disable-gpu', // Disable GPU acceleration (tidak perlu di headless)
+            '--disable-background-networking', // Kurangi background networking
+            '--disable-extensions', // Disable extensions untuk ringan
+            '--disable-sync', // Disable sync untuk performa
+            '--disable-default-apps', // Disable default apps
+            '--disable-renderer-backgrounding', // Disable renderer backgrounding
+            '--single-process', // Single process untuk hemat RAM
+            '--no-zygote', // No zygote process
+            // Tambahan optimasi RAM & CPU untuk low memory
+            '--disable-accelerated-2d-canvas', // Disable accelerated canvas
+            '--disable-features=TranslateUI,BlinkGenPropertyTrees', // Disable translate dan property trees
+            '--disable-breakpad', // Disable breakpad
+            '--disable-client-side-phishing-detection', // Disable phishing detection
+            '--disable-hang-monitor', // Disable hang monitor
+            '--disable-popup-blocking', // Disable popup blocking
+            '--disable-preconnect', // Disable preconnect
+            '--disable-domain-reliability', // Disable domain reliability
+            '--disable-component-update', // Disable component update
+            '--disable-ipc-flooding-protection', // Disable IPC flooding protection
+            '--disable-background-timer-throttling', // Disable background timer throttling
+            '--disable-backgrounding-occluded-windows', // Disable backgrounding occluded windows
+            '--disable-renderer-backgrounding', // Disable renderer backgrounding
+            '--disable-features=UserMediaScreenCapturing,VizDisplayCompositor', // Disable media capturing dan compositor
+            '--no-first-run', // Skip first run
+            '--no-pings', // No pings
+            '--disable-logging', // Disable logging untuk performa
+            '--disable-dev-tools', // Disable dev tools
+            '--disable-software-rasterizer', // Disable software rasterizer
+            '--disable-web-security', // Disable web security untuk low memory
+            '--memory-pressure-off', // Matikan memory pressure handling
+            '--max_old_space_size=256', // Optimize: Batasi heap size 256MB untuk low memory VPS
+            '--optimize-for-size', // Optimasi untuk ukuran kecil
+            // Khusus Railway/Ubuntu low memory
+            ...(isRailway || isProduction ? [
+              '--disable-background-timer-throttling', // Kurangi throttling
+              '--disable-backgrounding-occluded-windows', // Disable backgrounding
+              '--disable-features=UserMediaScreenCapturing', // Disable screen capturing
+              '--disable-component-extensions-with-background-pages', // Disable background extensions
+            ] : [])
+          ]
+        }
       })
-      .catch((error) => {
-        logError('Failed to generate QR image', error)
+
+      // Optimasi: Cleanup event listeners untuk hindari memory leak
+      client.on('qr', qr => {
+        logInfo('QR code generated, scan with WhatsApp mobile app')
+        qrcode.generate(qr, { small: true })
+
+        QRCode.toDataURL(qr)
+          .then((url) => {
+            latestQrDataUrl = url
+            logInfo('QR image generated for browser preview')
+          })
+          .catch((error) => {
+            logError('Failed to generate QR image', error)
+          })
       })
-  })
 
-  client.on('ready', () => {
-    logInfo('WhatsApp client ready')
-  })
+      client.on('ready', () => {
+        logInfo('WhatsApp client ready')
+        isStarting = false // Reset flag setelah ready
+        // Optimasi: Cleanup QR server setelah ready jika tidak diperlukan
+        if (qrServer && !process.env.PORT && !process.env.RAILWAY_ENVIRONMENT) {
+          qrServer.close(() => logInfo('QR server closed after ready'))
+        }
+      })
 
-  client.on('auth_failure', (msg) => {
-    logError('WhatsApp authentication failure', { message: msg })
-    // Only log, don't attempt reconnect to avoid loops
-  })
+      client.on('auth_failure', (msg) => {
+        logError('WhatsApp authentication failure', { message: msg })
+        isStarting = false // Reset flag pada error
+        // Optimasi: Jangan reconnect otomatis untuk hindari loop
+      })
 
-  client.on('disconnected', (reason) => {
-    if (reason === 'LOGOUT') {
-      logInfo('User logged out from phone - session ended')
-      // Don't reconnect if user logged out
-    } else {
-      logError('WhatsApp disconnected unexpectedly', { reason })
-      // Attempt to reconnect for non-logout disconnections
-      setTimeout(() => {
-        logInfo('Attempting WhatsApp reconnect after unexpected disconnect')
-        client.initialize().catch(err => logError('WhatsApp reconnect error', err))
-      }, 5000)
+      client.on('disconnected', (reason) => {
+        isStarting = false // Reset flag pada disconnect
+        if (reason === 'LOGOUT') {
+          logInfo('User logged out from phone - session ended')
+          // Optimasi: Cleanup session jika logout
+          clearSessionData()
+        } else {
+          logError('WhatsApp disconnected unexpectedly', { reason })
+          // Optimasi: Retry reconnect max 3x dengan delay
+          if (retryCount < 3) {
+            logInfo(`Attempting WhatsApp reconnect (${retryCount + 1}/3)`)
+            setTimeout(() => {
+              try {
+                client.initialize().catch(err => {
+                  logError('WhatsApp reconnect error', err)
+                  // Jika gagal, coba create client baru
+                  if (retryCount < 2) {
+                    createClientWithRetry(retryCount + 1)
+                  }
+                })
+              } catch (initError) {
+                logError('Failed to initialize reconnect', initError)
+              }
+            }, 5000 * (retryCount + 1)) // Exponential backoff
+          } else {
+            logError('Max reconnect attempts reached, giving up')
+          }
+        }
+      })
+
+      // Optimasi: Handle browser crash
+      client.on('browser_crashed', () => {
+        logError('Puppeteer browser crashed')
+        isStarting = false // Reset flag pada crash
+        // Optimasi: Restart client jika crash
+        if (retryCount < 3) {
+          logInfo(`Restarting client after crash (${retryCount + 1}/3)`)
+          setTimeout(() => createClientWithRetry(retryCount + 1), 10000)
+        }
+      })
+
+      return client
+
+      // Fix: Try/catch initialize dengan retry
+      client.initialize().catch((initError) => {
+        logError('Failed to initialize WhatsApp client', initError)
+        isStarting = false // Reset flag
+        // Retry max 3x
+        if (retryCount < 3) {
+          logInfo(`Retrying client initialization (${retryCount + 1}/3)`)
+          setTimeout(() => createClientWithRetry(retryCount + 1), 5000)
+        } else {
+          logError('Max initialization attempts reached')
+        }
+      })
+
+      }).catch((killError) => {
+        logError('Failed to kill browsers before launch', killError)
+        isStarting = false // Reset flag jika kill gagal
+      })
+
+    } catch (error) {
+      logError('Failed to create WhatsApp client', error)
+      isStarting = false // Reset flag pada error
+      // Optimasi: Retry create client max 3x
+      if (retryCount < 3) {
+        logInfo(`Retrying client creation (${retryCount + 1}/3)`)
+        return setTimeout(() => createClientWithRetry(retryCount + 1), 5000)
+      } else {
+        throw new Error('Max client creation attempts reached')
+      }
     }
-  })
+  }
+
+  const client = createClientWithRetry()
 
   if (process.env.PORT || process.env.RAILWAY_ENVIRONMENT) {
     startQrHttpServer()
